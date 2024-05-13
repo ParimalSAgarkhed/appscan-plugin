@@ -6,6 +6,7 @@
 
 package com.hcl.appscan.jenkins.plugin.actions;
 
+import com.hcl.appscan.sdk.utils.FileUtil;
 import hudson.model.Action;
 import hudson.model.Run;
 
@@ -38,6 +39,7 @@ public class ScanResults extends AppScanAction implements SimpleBuildStep.LastBu
 	private String m_scanServerUrl;
 	private String m_label;
 	private int m_totalFindings;
+    	private int m_criticalCount;
 	private int m_highCount;
 	private int m_mediumCount;
 	private int m_lowCount;
@@ -45,13 +47,14 @@ public class ScanResults extends AppScanAction implements SimpleBuildStep.LastBu
 	
 	@DataBoundConstructor
 	public ScanResults(Run<?,?> build, IResultsProvider provider, String name, String status,
-			int totalFindings, int highCount, int mediumCount, int lowCount, int infoCount, String scanServerUrl, String label) {
+			int totalFindings, int criticalCount, int highCount, int mediumCount, int lowCount, int infoCount, String scanServerUrl, String label) {
 		super(build.getParent());
 		m_build = build;
 		m_provider = provider;
 		m_name = name;
 		m_status = status;
 		m_totalFindings = totalFindings;
+                m_criticalCount = criticalCount;
 		m_highCount = highCount;
 		m_mediumCount = mediumCount;
 		m_lowCount = lowCount;
@@ -101,7 +104,10 @@ public class ScanResults extends AppScanAction implements SimpleBuildStep.LastBu
 	public int getLowCount() {
 		return m_lowCount;
 	}
-	
+
+	public int getCriticalCount(){
+                return m_criticalCount;
+        }
 	public int getInfoCount() {
 		return m_infoCount;
 	}
@@ -145,7 +151,7 @@ public class ScanResults extends AppScanAction implements SimpleBuildStep.LastBu
 	}
 	
 	private String getReportName() {
-		String name = (getScanType() + getName()).replaceAll(" ", ""); //$NON-NLS-1$ //$NON-NLS-2$
+		String name = (getScanType() + FileUtil.getValidFilename(getName())).replaceAll(" ", ""); //$NON-NLS-1$ //$NON-NLS-2$
 		return name + REPORT_SUFFIX + "." + m_provider.getResultsFormat().toLowerCase(); //$NON-NLS-1$
 	}
 	

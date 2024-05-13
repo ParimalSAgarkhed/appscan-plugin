@@ -1,5 +1,47 @@
 CHANGELOG
 =========
+1.3.1 (March, 2024)
+------
+- Migration to version 4 of ASoC REST APIs.
+- Bug fixes.
+
+1.3.0 (November, 2023)
+------
+- Support for new scan type : Software Composition Analysis (SCA) in AppScan on Cloud.
+- Support for adding Contact and Description for AppScan Enterprise jobs.
+- Bug fixes.
+
+1.2.0 (August, 2023)
+------
+- Added support for uploading files and folders in AppScan on Cloud/AppScan 360° for static analysis scans.
+- Support static analysis scan speeds.
+- Bug fixes.
+
+1.1.0 (June, 2023)
+------
+- Support for executing SAST Scans via AppScan 360°.
+- Support source code only scans in Static Analysis.
+- Bug Fixes
+
+1.0.14 (February, 2023)
+------
+* Support for critical severity.
+* Bug Fixes
+  
+1.0.13 (November, 2022)
+------
+* Fix generated report to show missing information.
+
+1.0.12 (July, 2022)
+------
+* Support additional login options for HCL AppScan on Cloud dynamic scans.
+* Fix to support Jenkins Environment variables for ASE scan fields.
+* Bug Fixes
+
+1.0.11 (June, 2022)
+------
+* Bug Fixes
+
 1.0.10 (April, 2022)
 ------
 * Discontinued Mobile Application Security Testing (MAST) support from HCL AppScan on Cloud task.

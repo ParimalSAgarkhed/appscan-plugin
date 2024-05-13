@@ -1,6 +1,6 @@
 /**
  * @ Copyright IBM Corporation 2016.
- * @ Copyright HCL Technologies Ltd. 2017, 2020, 2021, 2022.
+ * @ Copyright HCL Technologies Ltd. 2017, 2020, 2021, 2022, 2023.
  * LICENSE: Apache License, Version 2.0 https://www.apache.org/licenses/LICENSE-2.0
  */
 
@@ -60,7 +60,6 @@ import hudson.AbortException;
 import hudson.Extension;
 import hudson.FilePath;
 import hudson.Launcher;
-import hudson.Plugin;
 import hudson.Util;
 import hudson.init.InitMilestone;
 import hudson.init.Initializer;
@@ -95,16 +94,17 @@ public class AppScanBuildStep extends Builder implements SimpleBuildStep, Serial
 	private String m_credentials;
 	private List<FailureCondition> m_failureConditions;
 	private boolean m_emailNotification;
+	private boolean m_personalScan;
         private boolean m_intervention;
 	private boolean m_wait;
-    private boolean m_failBuildNonCompliance;
+    	private boolean m_failBuildNonCompliance;
 	private boolean m_failBuild;
 	private String m_scanStatus;
 	private IAuthenticationProvider m_authProvider;
 	private static final File JENKINS_INSTALL_DIR=new File(System.getProperty("user.dir"),".appscan");//$NON-NLS-1$ //$NON-NLS-2$
 	
 	@Deprecated
-	public AppScanBuildStep(Scanner scanner, String name, String type, String target, String application, String credentials, List<FailureCondition> failureConditions, boolean failBuildNonCompliance, boolean failBuild, boolean wait, boolean email, boolean intervention) {
+	public AppScanBuildStep(Scanner scanner, String name, String type, String target, String application, String credentials, List<FailureCondition> failureConditions, boolean failBuildNonCompliance, boolean failBuild, boolean wait, boolean email, boolean personalScan, boolean intervention) {
 		m_scanner = scanner;
 		m_name = (name == null || name.trim().equals("")) ? application.replaceAll(" ", "") + ThreadLocalRandom.current().nextInt(0, 10000) : name; //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
 		m_type = scanner.getType();
@@ -113,9 +113,10 @@ public class AppScanBuildStep extends Builder implements SimpleBuildStep, Serial
 		m_credentials = credentials;
 		m_failureConditions = failureConditions;
 		m_emailNotification = email;
+		m_personalScan = personalScan;
                 m_intervention = intervention;
 		m_wait = wait;
-        m_failBuildNonCompliance=failBuildNonCompliance;
+        	m_failBuildNonCompliance=failBuildNonCompliance;
 		m_failBuild = failBuild;
 	}
 	
@@ -128,9 +129,10 @@ public class AppScanBuildStep extends Builder implements SimpleBuildStep, Serial
 		m_application = application;
 		m_credentials = credentials;
 		m_emailNotification = false;
+		m_personalScan = false;
                 m_intervention = true;
 		m_wait = false;
-        m_failBuildNonCompliance=false;
+       		m_failBuildNonCompliance=false;
 		m_failBuild = false;
 	}
 	
@@ -218,6 +220,15 @@ public class AppScanBuildStep extends Builder implements SimpleBuildStep, Serial
 	public boolean getEmail() {
 		return m_emailNotification;
 	}
+
+	@DataBoundSetter
+	public void setPersonalScan(boolean personalScan) {
+		m_personalScan = personalScan;
+	}
+
+	public boolean getPersonalScan() {
+		return m_personalScan;
+	}
 	
     @Override
     public DescriptorImpl getDescriptor() {
@@ -259,11 +270,14 @@ public class AppScanBuildStep extends Builder implements SimpleBuildStep, Serial
 			properties.put(CoreConstants.APP_ID, m_application);
 			properties.put(CoreConstants.SCAN_NAME, resolver == null ? m_name : Util.replaceMacro(m_name, resolver) + "_" + SystemUtil.getTimeStamp()); //$NON-NLS-1$
 			properties.put(CoreConstants.EMAIL_NOTIFICATION, Boolean.toString(m_emailNotification));
+			properties.put(CoreConstants.PERSONAL_SCAN, Boolean.toString(m_personalScan));
 			properties.put("FullyAutomatic", Boolean.toString(!m_intervention));
 			properties.put("APPSCAN_IRGEN_CLIENT", "Jenkins");
 			properties.put("APPSCAN_CLIENT_VERSION", Jenkins.VERSION);
 			properties.put("IRGEN_CLIENT_PLUGIN_VERSION", JenkinsUtil.getPluginVersion());
 			properties.put("ClientType", JenkinsUtil.getClientType());
+            		properties.put(CoreConstants.SERVER_URL,m_authProvider.getServer());
+            		properties.put(CoreConstants.ACCEPT_INVALID_CERTS,Boolean.toString(m_authProvider.getacceptInvalidCerts()));
 			return properties;
 		}
 	}
@@ -294,8 +308,27 @@ public class AppScanBuildStep extends Builder implements SimpleBuildStep, Serial
     	m_authProvider = new JenkinsAuthenticationProvider(m_credentials, build.getParent().getParent());
     	final IProgress progress = new ScanProgress(listener);
     	final boolean suspend = m_wait;
-    	final IScan scan = ScanFactory.createScan(getScanProperties(build, listener), progress, m_authProvider);
-        
+        Map<String, String> properties = getScanProperties(build,listener);
+    	final IScan scan = ScanFactory.createScan(properties, progress, m_authProvider);
+        boolean isAppScan360 = ((JenkinsAuthenticationProvider) m_authProvider).isAppScan360();
+        if(isAppScan360) {
+            if (m_type.equals("Dynamic Analyzer")) {
+                throw new AbortException(Messages.error_dynamic_analyzer_AppScan360());
+            } if (m_type.equals(CoreConstants.SOFTWARE_COMPOSITION_ANALYZER)) {
+                throw new AbortException(Messages.error_sca_AppScan360());
+            } if (m_intervention) {
+                progress.setStatus(new Message(Message.WARNING, Messages.warning_allow_intervention_AppScan360()));
+            } if (properties.get("openSourceOnly") != null) {
+                throw new AbortException(Messages.error_sca_AppScan360());
+            }
+        } else if (m_authProvider.getacceptInvalidCerts()) {
+            progress.setStatus(new Message(Message.WARNING, Messages.warning_asoc_certificates()));
+        }
+
+        if (m_type.equals("Static Analyzer") && properties.containsKey(CoreConstants.OPEN_SOURCE_ONLY)) {
+            progress.setStatus(new Message(Message.WARNING, Messages.warning_sca()));
+        }
+
     	
     	IResultsProvider provider = launcher.getChannel().call(new Callable<IResultsProvider, AbortException>() {
 			private static final long serialVersionUID = 1L;
@@ -355,9 +388,16 @@ public class AppScanBuildStep extends Builder implements SimpleBuildStep, Serial
         else {
       provider.setProgress(new StdOutProgress()); //Avoid serialization problem with StreamBuildListener.
       VariableResolver<String> resolver = build instanceof AbstractBuild ? new BuildVariableResolver((AbstractBuild<?,?>)build, listener) : null;
-    	String asocAppUrl = m_authProvider.getServer() + "/serviceui/main/myapps/portfolio";
-		  build.addAction(new ResultsRetriever(build, provider, resolver == null ? m_name : Util.replaceMacro(m_name, resolver), asocAppUrl, Messages.label_asoc_homepage()));
-                
+    	String asocAppUrl = m_authProvider.getServer() + "/ui/main/myapps/" + m_application + "/scans/" + scan.getScanId();
+        String label;
+        if(isAppScan360){
+            label = Messages.label_appscan360_homepage();
+        } else {
+            label = Messages.label_asoc_homepage();
+        }
+
+        build.addAction(new ResultsRetriever(build, provider, resolver == null ? m_name : Util.replaceMacro(m_name, resolver), asocAppUrl, label));
+
         if(m_wait)
             shouldFailBuild(provider,build);	
     }
@@ -379,6 +419,7 @@ public class AppScanBuildStep extends Builder implements SimpleBuildStep, Serial
 		Items.XSTREAM2.addCompatibilityAlias("com.ibm.appscan.jenkins.plugin.builders.AppScanBuildStep", com.hcl.appscan.jenkins.plugin.builders.AppScanBuildStep.class);
     		Items.XSTREAM2.addCompatibilityAlias("com.ibm.appscan.jenkins.plugin.scanners.StaticAnalyzer", com.hcl.appscan.jenkins.plugin.scanners.StaticAnalyzer.class);
     		Items.XSTREAM2.addCompatibilityAlias("com.ibm.appscan.jenkins.plugin.scanners.DynamicAnalyzer", com.hcl.appscan.jenkins.plugin.scanners.DynamicAnalyzer.class);
+            Items.XSTREAM2.addCompatibilityAlias("com.hcl.appscan.jenkins.plugin.scanners.SoftwareCompositionAnalyzer", com.hcl.appscan.jenkins.plugin.scanners.SoftwareCompositionAnalyzer.class);
     		Items.XSTREAM2.addCompatibilityAlias("com.hcl.appscan.plugin.core.results.CloudResultsProvider", com.hcl.appscan.sdk.results.CloudResultsProvider.class);
 		Items.XSTREAM2.addCompatibilityAlias("com.hcl.appscan.plugin.core.scan.CloudScanServiceProvider", com.hcl.appscan.sdk.scan.CloudScanServiceProvider.class);
     	}
@@ -451,9 +492,23 @@ public class AppScanBuildStep extends Builder implements SimpleBuildStep, Serial
     		return FormValidation.ok();
     	}
     	
-    	public FormValidation doCheckApplication(@QueryParameter String application) {
-    		return FormValidation.validateRequired(application);
+    	public FormValidation doCheckApplication(@QueryParameter String application, @QueryParameter String credentials, @AncestorInPath ItemGroup<?> context) {
+            IAuthenticationProvider authProvider = new JenkinsAuthenticationProvider(credentials, context);
+            Map<String, String> applications = new CloudApplicationProvider(authProvider).getApplications();
+            if((applications==null || applications.isEmpty()) && !credentials.equals("")){
+                return FormValidation.error(Messages.error_application_empty_ui());
+            } else {
+                return FormValidation.validateRequired(application);
+            }
     	}
+
+	public FormValidation doCheckIntervention(@QueryParameter Boolean intervention,@QueryParameter String credentials, @AncestorInPath ItemGroup<?> context) {
+		JenkinsAuthenticationProvider checkAppScan360Connection = new JenkinsAuthenticationProvider(credentials,context);
+		if((intervention && checkAppScan360Connection.isAppScan360())){
+			return FormValidation.error(Messages.error_allow_intervention_ui());
+		}
+		return FormValidation.ok();
+	}
     }
 }
 

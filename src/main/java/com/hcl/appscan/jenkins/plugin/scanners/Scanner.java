@@ -6,6 +6,7 @@
 
 package com.hcl.appscan.jenkins.plugin.scanners;
 
+import hudson.AbortException;
 import hudson.Util;
 import hudson.model.AbstractDescribableImpl;
 import hudson.util.VariableResolver;
@@ -14,6 +15,7 @@ import java.io.File;
 import java.io.Serializable;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.regex.Pattern;
 
 public abstract class Scanner extends AbstractDescribableImpl<Scanner> implements ScannerConstants, Serializable {
 
@@ -35,22 +37,22 @@ public abstract class Scanner extends AbstractDescribableImpl<Scanner> implement
 		return m_target;
 	}
 	
-	public abstract Map<String, String> getProperties(VariableResolver<String> resolver);
+	public abstract Map<String, String> getProperties(VariableResolver<String> resolver) throws AbortException;
 	
 	public abstract String getType();
 	
 	protected String resolvePath(String path, VariableResolver<String> resolver) {
 		//First replace any variables in the path
 		path = Util.replaceMacro(path, resolver);
-		
+		Pattern pattern = Pattern.compile("^(\\\\|/|[a-zA-Z]:\\\\)");
+
 		//If the path is not absolute, make it relative to the workspace
-		File file = new File(path);
-		if(!file.isAbsolute()) {
-			String targetPath = "${WORKSPACE}" + File.separator + file.getPath();
+		if(!pattern.matcher(path).find()){
+			String targetPath = "${WORKSPACE}" + "/" + path ;
 			targetPath = Util.replaceMacro(targetPath, resolver);
-			file = new File(targetPath);
+			return targetPath;
 		}
 
-		return file.getAbsolutePath();
+		return path;
 	}
 }

@@ -1,5 +1,5 @@
 /**
- * @ Copyright HCL Technologies Ltd. 2019, 2020.
+ * @ Copyright HCL Technologies Ltd. 2019, 2020, 2023.
  * LICENSE: Apache License, Version 2.0 https://www.apache.org/licenses/LICENSE-2.0
  */
 
@@ -8,6 +8,7 @@ package com.hcl.appscan.jenkins.plugin.builders;
 import java.io.File;
 import java.io.IOException;
 import java.io.Serializable;
+import java.net.HttpURLConnection;
 import java.net.MalformedURLException;
 import java.net.URL;
 import java.util.ArrayList;
@@ -55,12 +56,14 @@ import com.hcl.appscan.jenkins.plugin.auth.ASECredentials;
 import com.hcl.appscan.jenkins.plugin.auth.JenkinsAuthenticationProvider;
 import com.hcl.appscan.jenkins.plugin.results.FailureCondition;
 import com.hcl.appscan.jenkins.plugin.results.ResultsInspector;
+import com.hcl.appscan.jenkins.plugin.util.BuildVariableResolver;
 import com.hcl.appscan.jenkins.plugin.util.ScanProgress;
 
 import hudson.AbortException;
 import hudson.Extension;
 import hudson.FilePath;
 import hudson.Launcher;
+import hudson.Util;
 import hudson.model.AbstractBuild;
 import hudson.model.AbstractProject;
 import hudson.model.BuildListener;
@@ -77,6 +80,7 @@ import hudson.tasks.Builder;
 import hudson.util.FormValidation;
 import hudson.util.ListBoxModel;
 import hudson.util.Secret;
+import hudson.util.VariableResolver;
 import jenkins.tasks.SimpleBuildStep;
 
 public class AppScanEnterpriseBuildStep extends Builder implements SimpleBuildStep, Serializable {
@@ -109,6 +113,8 @@ public class AppScanEnterpriseBuildStep extends Builder implements SimpleBuildSt
 
 	private String m_testOptimization;
 	private String m_scanStatus;
+    	private String m_description;
+    	private String m_contact;
 	
 	private IAuthenticationProvider m_authProvider;
 	private static final File JENKINS_INSTALL_DIR = new File(System.getProperty("user.dir"), ".appscan"); //$NON-NLS-1$ //$NON-NLS-2$
@@ -142,18 +148,22 @@ public class AppScanEnterpriseBuildStep extends Builder implements SimpleBuildSt
 		
 		m_scanType = "";
 		m_testOptimization = "";
+        	m_description = "";
+        	m_contact = "";
 	}
 	
 	public String getCredentials() {
 		// Post autocomplete feature, to handle backward compatibiliy 
 		// we have to initialize autocomplete lists explicitly 
 		// for already existing jobs.
-		if (m_credentials != null && m_credentials != ""
+		if (m_credentials != null && !m_credentials.isEmpty()
 				&& getDescriptor().folderMap == null
 				&& getDescriptor().applicationMap == null
 				&& getDescriptor().templateMap == null) {
-			getDescriptor().setAutoCompleteList(m_credentials,
-					Jenkins.getInstance().getItemGroup());
+			Jenkins jenkins = Jenkins.getInstanceOrNull();
+			if(jenkins != null) {
+				getDescriptor().setAutoCompleteList(m_credentials, jenkins.getItemGroup());
+			}
 		}
 		return m_credentials;
 	}
@@ -322,6 +332,24 @@ public class AppScanEnterpriseBuildStep extends Builder implements SimpleBuildSt
 		return m_failBuild;
 	}
 
+    	@DataBoundSetter
+    	public void setDescription(String description) {
+        	m_description = description;
+    	}
+
+    	public String getDescription() {
+        	return m_description;
+    	}
+
+    	@DataBoundSetter
+    	public void setContact(String contact) {
+        	m_contact = contact;
+    	}
+
+    	public String getContact() {
+        	return m_contact;
+    	}
+
 	@DataBoundSetter
 	public void setFailureConditions(List<FailureCondition> failureConditions) {
 		m_failureConditions = failureConditions;
@@ -384,30 +412,48 @@ public class AppScanEnterpriseBuildStep extends Builder implements SimpleBuildSt
 	}
 
 	private Map<String, String> getScanProperties(Run<?, ?> build, TaskListener listener) {
+            VariableResolver<String> resolver = build instanceof AbstractBuild ? new BuildVariableResolver((AbstractBuild<?,?>)build, listener) : null;
+            
 		Map<String, String> properties = new HashMap<String, String>();
 		properties.put(CoreConstants.SCANNER_TYPE, ASE_DYNAMIC_ANALYZER);
-		properties.put("credentials", m_credentials);
-		properties.put("application", m_application);
-		properties.put("startingURL", m_target);
-		properties.put("folder", m_folder);
-		properties.put("testPolicyId", m_testPolicy);
-		properties.put("templateId", m_template);
-		properties.put("agentServer", m_agent);
-		properties.put("exploreData", m_exploreData);
-		properties.put("loginType", m_loginType);
+                properties.put("credentials", m_credentials);
+                properties.put("testPolicyId", m_testPolicy);
+                properties.put("agentServer", m_agent);
+                properties.put("loginType", m_loginType);
+                properties.put("scanType", m_scanType);
+                properties.put("testOptimization", m_testOptimization);
+                properties.put(CoreConstants.EMAIL_NOTIFICATION, Boolean.toString(m_email));
+                
+                if(resolver == null) {
+                    properties.put("application", m_application);
+                    properties.put("startingURL", m_target);
+                    properties.put("folder", m_folder);
+                    properties.put("templateId", m_template);
+                    properties.put("exploreData", m_exploreData);
+                    properties.put(CoreConstants.SCAN_NAME, m_jobName + "_" + SystemUtil.getTimeStamp());
+                    properties.put("description", m_description);
+                    properties.put("contact", m_contact);
+                }
+                else {
+                    properties.put("application", Util.replaceMacro(m_application, resolver));
+                    properties.put("startingURL", Util.replaceMacro(m_target, resolver));
+                    properties.put("folder", Util.replaceMacro(m_folder, resolver));
+                    properties.put("templateId", Util.replaceMacro(m_template, resolver));
+                    properties.put("exploreData", m_exploreData.equals("") ? m_exploreData : resolvePath(m_exploreData, resolver));
+                    properties.put(CoreConstants.SCAN_NAME, Util.replaceMacro(m_jobName, resolver) + "_" + SystemUtil.getTimeStamp()); //$NON-NLS-1$
+                    properties.put("description", Util.replaceMacro(m_description, resolver));
+                    properties.put("contact", Util.replaceMacro(m_contact, resolver));
+                }
+
 		if (m_loginType != null) {
-			if (m_loginType.equals("Manual")) {
-				properties.put("trafficFile", m_trafficFile);
-			} else if (m_loginType.equals("Automatic")) {
-				properties.put("userName", m_userName);
-				properties.put("password",Secret.toString(m_password));
-			}
-		}
-		properties.put("scanType", m_scanType);
-		properties.put("testOptimization", m_testOptimization);
-		properties.put(CoreConstants.SCAN_NAME, m_jobName + "_" + SystemUtil.getTimeStamp());
-		properties.put(CoreConstants.EMAIL_NOTIFICATION, Boolean.toString(m_email));		
-		return properties;
+                    if (m_loginType.equals("Manual")) {
+                        properties.put("trafficFile", (resolver == null || m_trafficFile.equals(""))? m_trafficFile : resolvePath(m_trafficFile, resolver));
+                    } else if (m_loginType.equals("Automatic")) {
+                        properties.put("userName", resolver == null ? m_userName : Util.replaceMacro(m_userName, resolver));
+                        properties.put("password", resolver == null ? Secret.toString(m_password) : Util.replaceMacro(Secret.toString(m_password), resolver));
+                    }
+                }
+            return properties;
 	}
 
 	private void shouldFailBuild(IResultsProvider provider, Run<?, ?> build) throws AbortException, IOException {
@@ -425,13 +471,49 @@ public class AppScanEnterpriseBuildStep extends Builder implements SimpleBuildSt
 		}
 	}
 
+    	private boolean checkURLAccessibility(String URL) throws IOException {
+        	try {
+            		URL url = new URL(URL);
+            		HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+            		int responseCode = conn.getResponseCode();
+                    	return responseCode >= HttpURLConnection.HTTP_OK && responseCode < HttpURLConnection.HTTP_MULT_CHOICE;
+        	} catch (Exception e){
+            		throw new AbortException(Messages.error_url_validation(m_target));
+        	}
+    	}
+
+    	private String getUpdatedApplicationId(Map<String, String> application){
+        	if(application != null) {
+            	for(Map.Entry<String, String> entry : application.entrySet()){
+                	String appName = StringEscapeUtils.unescapeHtml(entry.getValue());
+                	if(appName != null && appName.equals(m_application)) {
+                    	return entry.getKey();
+                		}
+            		}
+        	}
+        	return null;
+    	}
+
 	private void performScan(Run<?, ?> build, Launcher launcher, TaskListener listener)
 			throws InterruptedException, IOException {
 		Map<String, String> properties = getScanProperties(build, listener);
-		m_authProvider = new ASEJenkinsAuthenticationProvider(properties.get("credentials"),
+
+        	if (m_target !=null && !m_target.isEmpty() && !checkURLAccessibility(m_target)) {
+            		throw new AbortException(Messages.error_url_validation(m_target));
+        	}
+
+        	m_authProvider = new ASEJenkinsAuthenticationProvider(properties.get("credentials"),
 				build.getParent().getParent());
 		final IProgress progress = new ScanProgress(listener);
 		final boolean suspend = m_wait;
+        	if(m_application.equals(getApplication())){
+		// indicating that we have an application name, not an id, so we need to fetch the id
+            		IASEAuthenticationProvider authProvider = (IASEAuthenticationProvider) m_authProvider;
+            		Map<String, String> appList = new ASEApplicationProvider(authProvider).getApplications();
+            		m_application = getUpdatedApplicationId(appList);
+            		properties.put("application", m_application);
+            		getDescriptor().applicationMap = appList;
+        	}
 		final IScan scan = ScanFactory.createScan(properties, progress, m_authProvider); // Call ASEScanFactory directly
 
 		IResultsProvider provider = launcher.getChannel().call(new Callable<IResultsProvider, AbortException>() {
@@ -489,12 +571,15 @@ public class AppScanEnterpriseBuildStep extends Builder implements SimpleBuildSt
 		provider.setProgress(new StdOutProgress()); // Avoid serialization problem with StreamBuildListener.
 		String aseScanUrl = m_authProvider.getServer();
 		String label = Messages.label_ase_homepage();
-		if (m_application != null && m_application.trim().length() > 0) {
+               
+                VariableResolver<String> resolver = build instanceof AbstractBuild ? new BuildVariableResolver((AbstractBuild<?,?>)build, listener) : null;
+                String application = resolver == null ? m_application : Util.replaceMacro(m_application, resolver);
+		if (application != null && application.trim().length() > 0) {
 			String applicationUrl = "/api/pages/applications.html#appProfile/%s/issues";
-			aseScanUrl += String.format(applicationUrl, m_application);
+			aseScanUrl += String.format(applicationUrl, application);
 			label = Messages.label_ase_application();
 		}
-		build.addAction(new ResultsRetriever(build, provider, m_jobName, aseScanUrl, label));
+		build.addAction(new ResultsRetriever(build, provider, resolver == null ? m_jobName : Util.replaceMacro(m_jobName, resolver), aseScanUrl, label));
 
 		if (m_wait)
 			shouldFailBuild(provider, build);
@@ -504,6 +589,21 @@ public class AppScanEnterpriseBuildStep extends Builder implements SimpleBuildSt
 		if (SystemUtil.isWindows() && System.getProperty("user.home").toLowerCase().indexOf("system32") >= 0) {
 			System.setProperty(CoreConstants.SACLIENT_INSTALL_DIR, JENKINS_INSTALL_DIR.getPath());
 		}
+	}
+        
+        private String resolvePath(String path, VariableResolver<String> resolver) {
+		//First replace any variables in the path
+		path = Util.replaceMacro(path, resolver);
+		
+		//If the path is not absolute, make it relative to the workspace
+		File file = new File(path);
+		if(!file.isAbsolute()) {
+			String targetPath = "${WORKSPACE}" + File.separator + file.getPath();
+			targetPath = Util.replaceMacro(targetPath, resolver);
+			file = new File(targetPath);
+		}
+
+		return file.getAbsolutePath();
 	}
 
 	@Symbol("appscanenterprise") //$NON-NLS-1$
